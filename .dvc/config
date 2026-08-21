@@ -1,0 +1,4 @@
+[core]
+    remote = labstore
+['remote "labstore"']
+    url = s3://mlops-income-census-516807978519-ap-southeast-2-an/dvc

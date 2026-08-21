@@ -7,6 +7,8 @@ on:
       - 'data/**.dvc'
       - 'src/**.py'
       - 'params.yaml'
+      - '.github/workflows/**'
+      - 'requirements.txt'
   workflow_dispatch:
 
 jobs:
@@ -36,31 +38,99 @@ jobs:
           python-version: "3.10"
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Authenticate to AWS S3
+        env:
+          STORAGE_CREDENTIALS: ${{ secrets.STORAGE_CREDENTIALS }}
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          CREDS='${{ secrets.STORAGE_CREDENTIALS }}'
-          echo "AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.aws_access_key_id')" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.aws_secret_access_key')" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=ap-southeast-2" >> $GITHUB_ENV
+          python - <<'PYEOF'
+          import json, os, re
+
+          creds_str = os.environ.get("STORAGE_CREDENTIALS", "").strip()
+          key_id = os.environ.get("AWS_KEY", "").strip()
+          secret_key = os.environ.get("AWS_SECRET", "").strip()
+
+          if not key_id or not secret_key:
+              # Thử parse JSON
+              try:
+                  data = json.loads(creds_str)
+                  for k, v in data.items():
+                      if "access_key" in k.lower() and "secret" not in k.lower():
+                          key_id = str(v).strip()
+                      elif "secret" in k.lower():
+                          secret_key = str(v).strip()
+              except Exception:
+                  pass
+
+          if not key_id or not secret_key:
+              # Thử parse theo regex hoặc dòng
+              lines = [l.strip() for l in creds_str.splitlines() if l.strip()]
+              for line in lines:
+                  if "=" in line:
+                      k, v = line.split("=", 1)
+                      if "access_key" in k.lower() and "secret" not in k.lower():
+                          key_id = v.strip().strip('"').strip("'")
+                      elif "secret" in k.lower():
+                          secret_key = v.strip().strip('"').strip("'")
+                  elif line.startswith("AKIA"):
+                      key_id = line
+                  elif len(line) >= 30 and not line.startswith("AKIA"):
+                      secret_key = line
+
+          print(f"Xác thực AWS Key ID: {key_id[:4]}**** (độ dài secret: {len(secret_key)})")
+
+          # Tạo file ~/.aws/credentials và ~/.aws/config để mọi thư viện AWS tự nhận diện
+          aws_dir = os.path.expanduser("~/.aws")
+          os.makedirs(aws_dir, exist_ok=True)
+          with open(os.path.join(aws_dir, "credentials"), "w") as f:
+              f.write(f"[default]\naws_access_key_id = {key_id}\naws_secret_access_key = {secret_key}\n")
+          with open(os.path.join(aws_dir, "config"), "w") as f:
+              f.write("[default]\nregion = ap-southeast-2\noutput = json\n")
+
+          # Ghi vào GITHUB_ENV
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"AWS_ACCESS_KEY_ID={key_id}\n")
+              f.write(f"AWS_SECRET_ACCESS_KEY={secret_key}\n")
+              f.write("AWS_DEFAULT_REGION=ap-southeast-2\n")
+              f.write("AWS_REGION=ap-southeast-2\n")
+              f.write("MLFLOW_TRACKING_URI=sqlite:///mlflow.db\n")
+              f.write("MLFLOW_ARTIFACT_ROOT=./mlartifacts\n")
+          PYEOF
+
       - name: Pull data with DVC
-        run: dvc pull data/train_batch1.csv.dvc data/holdout.csv.dvc
+        run: |
+          dvc remote modify labstore access_key_id "$AWS_ACCESS_KEY_ID"
+          dvc remote modify labstore secret_access_key "$AWS_SECRET_ACCESS_KEY"
+          dvc remote modify labstore region ap-southeast-2
+          dvc pull data/train_batch1.csv.dvc data/holdout.csv.dvc
+
       - name: Train model
         run: python src/train.py
+
       - name: Read report
         id: read_report
         run: |
           F1=$(python -c "import json; d=json.load(open('outputs/report.json')); print(d['f1_score'])")
           echo "f1=$F1" >> $GITHUB_OUTPUT
+
       - name: Upload model to S3
         run: |
           python - <<'PYEOF'
-          import boto3
+          import boto3, os
           bucket_name = "${{ secrets.ARTIFACT_BUCKET }}"
-          s3 = boto3.client('s3')
+          s3 = boto3.client(
+              's3',
+              aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+              aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+              region_name="ap-southeast-2"
+          )
           s3.upload_file("models/model.joblib", bucket_name, "artifacts/current/model.joblib")
           s3.upload_file("outputs/report.json", bucket_name, "artifacts/current/report.json")
           print("Uploaded model and report to S3.")
           PYEOF
+
       - name: Save report artifact
         uses: actions/upload-artifact@v4
         with:
@@ -75,15 +145,54 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Authenticate AWS
+        env:
+          STORAGE_CREDENTIALS: ${{ secrets.STORAGE_CREDENTIALS }}
+          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          CREDS='${{ secrets.STORAGE_CREDENTIALS }}'
-          echo "AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.aws_access_key_id')" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.aws_secret_access_key')" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=ap-southeast-2" >> $GITHUB_ENV
+          python - <<'PYEOF'
+          import json, os
+
+          creds_str = os.environ.get("STORAGE_CREDENTIALS", "").strip()
+          key_id = os.environ.get("AWS_KEY", "").strip()
+          secret_key = os.environ.get("AWS_SECRET", "").strip()
+
+          if not key_id or not secret_key:
+              try:
+                  data = json.loads(creds_str)
+                  for k, v in data.items():
+                      if "access_key" in k.lower() and "secret" not in k.lower():
+                          key_id = str(v).strip()
+                      elif "secret" in k.lower():
+                          secret_key = str(v).strip()
+              except Exception:
+                  pass
+
+          if not key_id or not secret_key:
+              lines = [l.strip() for l in creds_str.splitlines() if l.strip()]
+              for line in lines:
+                  if "=" in line:
+                      k, v = line.split("=", 1)
+                      if "access_key" in k.lower() and "secret" not in k.lower():
+                          key_id = v.strip().strip('"').strip("'")
+                      elif "secret" in k.lower():
+                          secret_key = v.strip().strip('"').strip("'")
+                  elif line.startswith("AKIA"):
+                      key_id = line
+                  elif len(line) >= 30 and not line.startswith("AKIA"):
+                      secret_key = line
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"AWS_ACCESS_KEY_ID={key_id}\n")
+              f.write(f"AWS_SECRET_ACCESS_KEY={secret_key}\n")
+              f.write("AWS_DEFAULT_REGION=ap-southeast-2\n")
+              f.write("AWS_REGION=ap-southeast-2\n")
+          PYEOF
+
       - name: Check quality gate & Rollback Guard
         run: |
           python - <<'PYEOF'
-          import sys, json, boto3
+          import sys, json, boto3, os
           from botocore.exceptions import ClientError
 
           f1 = float("${{ needs.train.outputs.f1 }}")
@@ -93,7 +202,12 @@ jobs:
               sys.exit(f"FAILED: f1_score {f1:.4f} < {F1_THRESHOLD}. Huỷ triển khai.")
 
           bucket_name = "${{ secrets.ARTIFACT_BUCKET }}"
-          s3 = boto3.client('s3')
+          s3 = boto3.client(
+              's3',
+              aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+              aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+              region_name="ap-southeast-2"
+          )
           try:
               s3.download_file(bucket_name, "artifacts/previous/report.json", "/tmp/prev_report.json")
               with open("/tmp/prev_report.json") as f:

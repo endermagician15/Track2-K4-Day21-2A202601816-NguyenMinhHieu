@@ -15,6 +15,7 @@ jobs:
   unit-test:
     name: Unit Test
     runs-on: ubuntu-latest
+    environment: Lab21
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +30,7 @@ jobs:
     name: Train
     needs: unit-test
     runs-on: ubuntu-latest
+    environment: Lab21
     outputs:
       f1: ${{ steps.read_report.outputs.f1 }}
     steps:
@@ -81,16 +83,11 @@ jobs:
           if not key_id or not secret_key:
               print("=" * 60)
               print("[LỖI XÁC THỰC] Không tìm thấy AWS Access Key hoặc Secret Key trong GitHub Secrets!")
-              print("Vui lòng vào Settings -> Secrets and variables -> Actions trên GitHub:")
-              print("Tạo secret STORAGE_CREDENTIALS có dạng:")
-              print('{"aws_access_key_id": "AKIA...", "aws_secret_access_key": "..."}')
-              print("Hoặc tạo 2 secret riêng: AWS_ACCESS_KEY_ID và AWS_SECRET_ACCESS_KEY")
               print("=" * 60)
               sys.exit(1)
 
           print(f"-> Đã tìm thấy AWS Access Key ID: {key_id[:4]}**** (Độ dài secret: {len(secret_key)})")
 
-          # Tạo file ~/.aws/credentials
           aws_dir = os.path.expanduser("~/.aws")
           os.makedirs(aws_dir, exist_ok=True)
           with open(os.path.join(aws_dir, "credentials"), "w") as f:
@@ -98,7 +95,6 @@ jobs:
           with open(os.path.join(aws_dir, "config"), "w") as f:
               f.write("[default]\nregion = ap-southeast-2\noutput = json\n")
 
-          # Đưa vào GITHUB_ENV
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"AWS_ACCESS_KEY_ID={key_id}\n")
               f.write(f"AWS_SECRET_ACCESS_KEY={secret_key}\n")
@@ -152,6 +148,7 @@ jobs:
     name: Quality Gate
     needs: train
     runs-on: ubuntu-latest
+    environment: Lab21
     steps:
       - name: Authenticate AWS
         env:
@@ -236,6 +233,7 @@ jobs:
     name: Release
     needs: quality-gate
     runs-on: ubuntu-latest
+    environment: Lab21
     steps:
       - name: SSH deploy to EC2
         uses: appleboy/ssh-action@v1.0.3

@@ -42,30 +42,29 @@ jobs:
       - name: Authenticate to AWS S3
         env:
           STORAGE_CREDENTIALS: ${{ secrets.STORAGE_CREDENTIALS }}
-          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          SECRET_AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SECRET_AWS_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           python - <<'PYEOF'
-          import json, os, re
+          import json, os, sys
 
           creds_str = os.environ.get("STORAGE_CREDENTIALS", "").strip()
-          key_id = os.environ.get("AWS_KEY", "").strip()
-          secret_key = os.environ.get("AWS_SECRET", "").strip()
+          key_id = os.environ.get("SECRET_AWS_KEY", "").strip()
+          secret_key = os.environ.get("SECRET_AWS_SECRET", "").strip()
 
           if not key_id or not secret_key:
-              # Thử parse JSON
               try:
                   data = json.loads(creds_str)
-                  for k, v in data.items():
-                      if "access_key" in k.lower() and "secret" not in k.lower():
-                          key_id = str(v).strip()
-                      elif "secret" in k.lower():
-                          secret_key = str(v).strip()
+                  if isinstance(data, dict):
+                      for k, v in data.items():
+                          if "access_key" in k.lower() and "secret" not in k.lower():
+                              key_id = str(v).strip()
+                          elif "secret" in k.lower():
+                              secret_key = str(v).strip()
               except Exception:
                   pass
 
           if not key_id or not secret_key:
-              # Thử parse theo regex hoặc dòng
               lines = [l.strip() for l in creds_str.splitlines() if l.strip()]
               for line in lines:
                   if "=" in line:
@@ -79,9 +78,19 @@ jobs:
                   elif len(line) >= 30 and not line.startswith("AKIA"):
                       secret_key = line
 
-          print(f"Xác thực AWS Key ID: {key_id[:4]}**** (độ dài secret: {len(secret_key)})")
+          if not key_id or not secret_key:
+              print("=" * 60)
+              print("[LỖI XÁC THỰC] Không tìm thấy AWS Access Key hoặc Secret Key trong GitHub Secrets!")
+              print("Vui lòng vào Settings -> Secrets and variables -> Actions trên GitHub:")
+              print("Tạo secret STORAGE_CREDENTIALS có dạng:")
+              print('{"aws_access_key_id": "AKIA...", "aws_secret_access_key": "..."}')
+              print("Hoặc tạo 2 secret riêng: AWS_ACCESS_KEY_ID và AWS_SECRET_ACCESS_KEY")
+              print("=" * 60)
+              sys.exit(1)
 
-          # Tạo file ~/.aws/credentials và ~/.aws/config để mọi thư viện AWS tự nhận diện
+          print(f"-> Đã tìm thấy AWS Access Key ID: {key_id[:4]}**** (Độ dài secret: {len(secret_key)})")
+
+          # Tạo file ~/.aws/credentials
           aws_dir = os.path.expanduser("~/.aws")
           os.makedirs(aws_dir, exist_ok=True)
           with open(os.path.join(aws_dir, "credentials"), "w") as f:
@@ -89,7 +98,7 @@ jobs:
           with open(os.path.join(aws_dir, "config"), "w") as f:
               f.write("[default]\nregion = ap-southeast-2\noutput = json\n")
 
-          # Ghi vào GITHUB_ENV
+          # Đưa vào GITHUB_ENV
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"AWS_ACCESS_KEY_ID={key_id}\n")
               f.write(f"AWS_SECRET_ACCESS_KEY={secret_key}\n")
@@ -147,24 +156,25 @@ jobs:
       - name: Authenticate AWS
         env:
           STORAGE_CREDENTIALS: ${{ secrets.STORAGE_CREDENTIALS }}
-          AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          SECRET_AWS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SECRET_AWS_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           python - <<'PYEOF'
-          import json, os
+          import json, os, sys
 
           creds_str = os.environ.get("STORAGE_CREDENTIALS", "").strip()
-          key_id = os.environ.get("AWS_KEY", "").strip()
-          secret_key = os.environ.get("AWS_SECRET", "").strip()
+          key_id = os.environ.get("SECRET_AWS_KEY", "").strip()
+          secret_key = os.environ.get("SECRET_AWS_SECRET", "").strip()
 
           if not key_id or not secret_key:
               try:
                   data = json.loads(creds_str)
-                  for k, v in data.items():
-                      if "access_key" in k.lower() and "secret" not in k.lower():
-                          key_id = str(v).strip()
-                      elif "secret" in k.lower():
-                          secret_key = str(v).strip()
+                  if isinstance(data, dict):
+                      for k, v in data.items():
+                          if "access_key" in k.lower() and "secret" not in k.lower():
+                              key_id = str(v).strip()
+                          elif "secret" in k.lower():
+                              secret_key = str(v).strip()
               except Exception:
                   pass
 
